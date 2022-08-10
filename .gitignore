@@ -1,0 +1,9 @@
+/Checkpoints/
+/DataProcessing/image_test/
+/DataProcessing/csv_file/
+/__pycache__/
+/logs/
+.log
+.idea
+.vscode
+*.jpg
