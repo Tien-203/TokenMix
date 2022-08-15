@@ -4,7 +4,7 @@ from config.singleton import Singleton
 class Config(metaclass=Singleton):
     # Data
     save_img = False
-    image_size = 256
+    image_size = 224
     # Object is divided 7*7 patch
     mix_shape = (7, 7)
     # Range of dataset to choose the negative image
@@ -14,12 +14,15 @@ class Config(metaclass=Singleton):
 
     # Model
     epochs = 200
-    batch_size = 12
+    batch_size = 4
     similarity_thresh = 0.1
     device = "1"
-    tensorboard_dir = "Checkpoints/tensorboard3"
-    save_model_dir = "Checkpoints/weight3"
+    tensorboard_dir = "Checkpoints/tensorboard_vit_test"
+    save_model_dir = "Checkpoints/weight_vit_test"
     save_model_period = 1
     lr = 0.001
     weight_decay = 0.05
+
+    # Vision transformer
+    pretrained = "google/vit-base-patch16-224-in21k"
 

@@ -14,8 +14,9 @@ from sklearn.utils import shuffle
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from torch.utils.tensorboard import SummaryWriter
+from transformers import ViTModel, ViTFeatureExtractor
 
-from config.config import Config
+from config.config_vit import Config
 from config.common_keys import *
 
 config_ = Config()
@@ -192,32 +193,13 @@ class FashionDataLoader(Dataset):
 
 
 class Model(nn.Module):
-    def __init__(self):
+    def __init__(self, config: Config = None):
         super(Model, self).__init__()
-        self.resnet50 = torch.hub.load('pytorch/vision:v0.10.0', 'resnet50', pretrained=True)
-        self.fc1 = nn.LazyLinear(out_features=1024)
-        self.layer_norm = nn.LayerNorm(1024)
-        self.drop_out_1 = nn.Dropout(0.5)
-        self.fc2 = nn.Linear(in_features=1024, out_features=512)
-        self.drop_out_2 = nn.Dropout(0.3)
-        self.head = self.head_block()
+        self.vit_16 = ViTModel.from_pretrained(config.pretrained)
         self.cosine = nn.CosineSimilarity()
 
-    def head_block(self):
-        return nn.Sequential(
-            nn.Flatten(),
-            self.fc1,
-            self.layer_norm,
-            nn.ReLU(),
-            self.drop_out_1,
-            self.fc2,
-            nn.ReLU(),
-            self.drop_out_2
-        )
-
     def forward_one(self, x):
-        x = self.resnet50(x)
-        x = self.head(x)
+        x = self.vit_16(**x).pooler_output
         return x
 
     def forward(self, pos_img, neg_img, mix_img):
@@ -234,7 +216,8 @@ class TrainModel:
         self.csv_file = csv_file
         self.config = config
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.model = Model().to(self.device)
+        self.model = Model(config=config).to(self.device)
+        self.feature_extractor = ViTFeatureExtractor.from_pretrained(config.pretrained)
         self.criterion = nn.MSELoss().to(self.device)
         # self.optimizer = optim.Adam(self.model.parameters(), lr=self.config.lr, betas=(0.9, 0.999),
         #                             eps=1e-08, weight_decay=0, amsgrad=False)
@@ -249,9 +232,7 @@ class TrainModel:
                                                transforms.ToTensor(),
                                                transforms.RandomAutocontrast(),
                                                transforms.RandomHorizontalFlip(p=0.5),
-                                               transforms.RandomCrop(size=int(self.config.image_size*0.9)),
-                                               transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                                                    std=[0.229, 0.224, 0.225])]))
+                                               transforms.RandomCrop(size=int(self.config.image_size*0.9))]))
         self.test_data = self.data_loader(self.test_data, is_test=True)
         self.writer = SummaryWriter(log_dir=self.config.tensorboard_dir, flush_secs=2)
 
@@ -260,9 +241,7 @@ class TrainModel:
             data = FashionDataLoader(df=df, config=self.config, is_test=is_test,
                                      transform=transforms.Compose([
                                          transforms.Resize(self.config.image_size),
-                                         transforms.ToTensor(),
-                                         transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                                              std=[0.229, 0.224, 0.225])]))
+                                         transforms.ToTensor()]))
         else:
             data = FashionDataLoader(df=df, config=self.config, is_test=is_test, transform=transform)
         return DataLoader(data, batch_size=self.config.batch_size, num_workers=1)
@@ -283,12 +262,15 @@ class TrainModel:
         test_loss = None
         test_accuracy = None
         for iter, data in tqdm(enumerate(self.train_data)):
-            if iter % 100 and iter > 0:
+            if iter % 500 and iter > 0:
                 a = list(self.model.parameters())[-1].clone()
             self.optimizer.zero_grad()
-            pos_img = data[POS_SAMPLE][IMAGE].to(self.device)
-            neg_img = data[NEG_SAMPLE][IMAGE].to(self.device)
-            mix_img = data[MIX_SAMPLE][IMAGE].to(self.device)
+            pos_img = self.feature_extractor(images=[img for img in data[POS_SAMPLE][IMAGE]],
+                                             return_tensors="pt").to(self.device)
+            neg_img = self.feature_extractor(images=[img for img in data[NEG_SAMPLE][IMAGE]],
+                                             return_tensors="pt").to(self.device)
+            mix_img = self.feature_extractor(images=[img for img in data[MIX_SAMPLE][IMAGE]],
+                                             return_tensors="pt").to(self.device)
             pos_diff, neg_diff = self.model(pos_img, neg_img, mix_img)
             pos_label = data[POS_RATIO].to(self.device)
             neg_label = data[NEG_RATIO].to(self.device)
@@ -300,7 +282,7 @@ class TrainModel:
             accuracy = (torch.abs(pos_diff - pos_label) <= self.config.similarity_thresh).sum() + \
                        (torch.abs(neg_diff - neg_label) <= self.config.similarity_thresh).sum()
             train_accuracy += accuracy
-            if iter % 100 == 0 and iter > 0:
+            if iter % 500 == 0 and iter > 0:
                 acc = train_accuracy/((iter+1)*self.config.batch_size*2)
                 print(f"\t\tEpoch {epoch} - iter {iter} - train_loss {loss} - train_acc {acc}")
                 b = list(self.model.parameters())[-1].clone()
@@ -317,9 +299,12 @@ class TrainModel:
             self.model.eval()
             with torch.no_grad():
                 for iter, data in tqdm(enumerate(self.test_data)):
-                    pos_img = data[POS_SAMPLE][IMAGE].to(self.device)
-                    neg_img = data[NEG_SAMPLE][IMAGE].to(self.device)
-                    mix_img = data[MIX_SAMPLE][IMAGE].to(self.device)
+                    pos_img = self.feature_extractor(images=[img for img in data[POS_SAMPLE][IMAGE]],
+                                                     return_tensors="pt").to(self.device)
+                    neg_img = self.feature_extractor(images=[img for img in data[NEG_SAMPLE][IMAGE]],
+                                                     return_tensors="pt").to(self.device)
+                    mix_img = self.feature_extractor(images=[img for img in data[MIX_SAMPLE][IMAGE]],
+                                                     return_tensors="pt").to(self.device)
                     pos_diff, neg_diff = self.model(pos_img, neg_img, mix_img)
                     pos_label = data[POS_RATIO].to(self.device)
                     neg_label = data[NEG_RATIO].to(self.device)
