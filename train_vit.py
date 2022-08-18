@@ -262,6 +262,7 @@ class TrainModel:
         test_loss = None
         test_accuracy = None
         for iter, data in tqdm(enumerate(self.train_data)):
+            a = []
             if iter % 500 and iter > 0:
                 a = list(self.model.parameters())[-1].clone()
             self.optimizer.zero_grad()
@@ -333,7 +334,15 @@ class TrainModel:
             if result[TEST_ACCURACY] is not None and result[TEST_ACCURACY] > max_acc:
                 if not os.path.exists(self.config.save_model_dir):
                     os.mkdir(self.config.save_model_dir)
-                torch.save(self.model, f"{self.config.save_model_dir}/resnet_model_{epoch}_{result[TEST_ACCURACY]}.pth")
+                # torch.save(self.model,
+                # f"{self.config.save_model_dir}/resnet_model_{epoch}_{result[TEST_ACCURACY]}.pth")
+                torch.save({
+                    "epoch": epoch,
+                    "model_state_dict": self.model.state_dict(),
+                    "optimizer_state_dict": self.optimizer.state_dict(),
+                    "loss_train": result[TRAIN_LOSS],
+                    "loss_test": result[TEST_LOSS]
+                }, f"{self.config.save_model_dir}/resnet_model_{epoch}_{result[TEST_ACCURACY]}.pth")
                 print(f"Save model at {self.config.save_model_dir}/resnet_model_{epoch}_{result[TEST_ACCURACY]}.pth")
                 max_acc = result[TEST_ACCURACY]
 
@@ -345,4 +354,3 @@ if __name__ == "__main__":
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     os.environ["CUDA_VISIBLE_DEVICES"] = config_.device
     TrainModel(csv_file="DataProcessing/csv_file/annotation.csv", config=config_).train()
-
