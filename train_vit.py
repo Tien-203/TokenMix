@@ -1,4 +1,5 @@
 from typing import List, Dict
+import argparse
 
 import torch
 import torch.nn as nn
@@ -199,7 +200,8 @@ class Model(nn.Module):
         self.cosine = nn.CosineSimilarity()
 
     def forward_one(self, x):
-        x = self.vit_16(**x).pooler_output
+        # x = self.vit_16(**x).pooler_output
+        x = self.vit_16(**x).last_hidden_state[:, 0]
         return x
 
     def forward(self, pos_img, neg_img, mix_img):
@@ -212,18 +214,17 @@ class Model(nn.Module):
 
 
 class TrainModel:
-    def __init__(self, csv_file: str, config: Config):
+    def __init__(self, csv_file: str, config: Config, args=None):
         self.csv_file = csv_file
         self.config = config
+        self.args = args
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.model = Model(config=config).to(self.device)
         self.feature_extractor = ViTFeatureExtractor.from_pretrained(config.pretrained)
+        self.model = Model(config=config).to(self.device)
         self.criterion = nn.MSELoss().to(self.device)
-        # self.optimizer = optim.Adam(self.model.parameters(), lr=self.config.lr, betas=(0.9, 0.999),
-        #                             eps=1e-08, weight_decay=0, amsgrad=False)
-        # self.optimizer = optim.SGD(self.model.parameters(), lr=0.001, momentum=0.9)
         self.optimizer = optim.AdamW(self.model.parameters(), lr=self.config.lr, weight_decay=self.config.weight_decay)
         self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=5, eta_min=0.00001)
+        self.load_pretrained_model()
         self.train_data, self.test_data = self.train_test_split(csv_file=csv_file)
         print(self.train_data.iloc[0])
         self.train_data = self.data_loader(self.train_data, is_test=False,
@@ -235,6 +236,14 @@ class TrainModel:
                                                transforms.RandomCrop(size=int(self.config.image_size*0.9))]))
         self.test_data = self.data_loader(self.test_data, is_test=True)
         self.writer = SummaryWriter(log_dir=self.config.tensorboard_dir, flush_secs=2)
+
+    def load_pretrained_model(self):
+        if self.args.pretrained is not None:
+            checkpoint = torch.load(self.args.pretrained, map_location=self.device)
+            self.model.load_state_dict(checkpoint["model_state_dict"], strict=False)
+            self.model.to(self.device)
+            self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            self.scheduler.load_state_dict(checkpoint["scheduler"])
 
     def data_loader(self, df: pd.DataFrame, is_test, transform=None):
         if transform is None:
@@ -262,9 +271,9 @@ class TrainModel:
         test_loss = None
         test_accuracy = None
         for iter, data in tqdm(enumerate(self.train_data)):
-            a = []
-            if iter % 500 and iter > 0:
-                a = list(self.model.parameters())[-1].clone()
+            # a = []
+            # if iter % 500 and iter > 0:
+            #     a = list(self.model.parameters())[-5].clone()
             self.optimizer.zero_grad()
             pos_img = self.feature_extractor(images=[img for img in data[POS_SAMPLE][IMAGE]],
                                              return_tensors="pt").to(self.device)
@@ -286,13 +295,13 @@ class TrainModel:
             if iter % 500 == 0 and iter > 0:
                 acc = train_accuracy/((iter+1)*self.config.batch_size*2)
                 print(f"\t\tEpoch {epoch} - iter {iter} - train_loss {loss} - train_acc {acc}")
-                b = list(self.model.parameters())[-1].clone()
-                print(torch.equal(b.data, a.data))
+                # b = list(self.model.parameters())[-5].clone()
+                # print(torch.equal(b, a))
         train_loss /= len(self.train_data)
         train_accuracy = train_accuracy / len(self.train_data) / self.config.batch_size / 2
         print(f"Train_loss: {train_loss} - Train_acc: {train_accuracy}")
-        self.writer.add_scalar("Train Loss", train_loss, epoch)
-        self.writer.add_scalar("Train Accuracy", train_accuracy, epoch)
+        self.writer.add_scalar("Loss/Train Loss", train_loss, epoch)
+        self.writer.add_scalar("Accuracy/Train Accuracy", train_accuracy, epoch)
         if epoch % self.config.save_model_period == 0:
             print("Staring validation...")
             test_loss = 0
@@ -316,8 +325,8 @@ class TrainModel:
                     test_accuracy += accuracy
             test_loss /= len(self.test_data)
             test_accuracy = test_accuracy / len(self.test_data) / self.config.batch_size / 2
-            self.writer.add_scalar("Test Loss", test_loss, epoch)
-            self.writer.add_scalar("Test Accuracy", test_accuracy, epoch)
+            self.writer.add_scalar("Loss/Test Loss", test_loss, epoch)
+            self.writer.add_scalar("Accuracy/Test Accuracy", test_accuracy, epoch)
             print(f"Test_loss: {test_loss} - Test_acc: {test_accuracy}")
         return {
             TRAIN_LOSS: train_loss,
@@ -330,21 +339,28 @@ class TrainModel:
         max_acc = 0
         for epoch in range(self.config.epochs):
             print(f"Starting epoch {epoch}...")
+            for param in self.model.parameters():
+                param.requires_grad = True
             result = self.train_epoch(epoch=epoch)
             if result[TEST_ACCURACY] is not None and result[TEST_ACCURACY] > max_acc:
                 if not os.path.exists(self.config.save_model_dir):
                     os.mkdir(self.config.save_model_dir)
-                # torch.save(self.model,
-                # f"{self.config.save_model_dir}/resnet_model_{epoch}_{result[TEST_ACCURACY]}.pth")
                 torch.save({
                     "epoch": epoch,
                     "model_state_dict": self.model.state_dict(),
                     "optimizer_state_dict": self.optimizer.state_dict(),
+                    "scheduler": self.scheduler.state_dict(),
                     "loss_train": result[TRAIN_LOSS],
                     "loss_test": result[TEST_LOSS]
                 }, f"{self.config.save_model_dir}/resnet_model_{epoch}_{result[TEST_ACCURACY]}.pth")
                 print(f"Save model at {self.config.save_model_dir}/resnet_model_{epoch}_{result[TEST_ACCURACY]}.pth")
                 max_acc = result[TEST_ACCURACY]
+
+
+def option():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--pretrained", type=str, default=None, help="Load pretrained model")
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
@@ -353,4 +369,5 @@ if __name__ == "__main__":
     warnings.filterwarnings("ignore")
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     os.environ["CUDA_VISIBLE_DEVICES"] = config_.device
-    TrainModel(csv_file="DataProcessing/csv_file/annotation.csv", config=config_).train()
+    argument = option()
+    TrainModel(csv_file="DataProcessing/csv_file/annotation.csv", config=config_, args=argument).train()

@@ -3,6 +3,7 @@ import os
 
 import cv2
 
+
 def remove_dummy(folder: str):
     for root, dirs, files in os.walk(folder, topdown=False):
         for name in files:
@@ -13,6 +14,7 @@ def remove_dummy(folder: str):
                 print(e)
                 print(file_path)
                 os.remove(file_path)
+
 
 if __name__ == "__main__":
     remove_dummy("/AIHCM/ComputerVision/tienhn/fashion-dataset/image")
