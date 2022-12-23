@@ -339,7 +339,6 @@ if __name__ == "__main__":
     df["bbox"] = bboxes
     # df.to_csv("csv_file/annotation.csv")
 
-
 # if __name__ == "__main__":
 #     import pandas as pd
 #     from tqdm import tqdm
