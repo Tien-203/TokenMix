@@ -308,6 +308,7 @@ class ClothModel(metaclass=Singleton):
         return PID, distances[0][0], True
 
 
+######################## ORIGINAL #########################
 if __name__ == "__main__":
     import pandas as pd
     from tqdm import tqdm
@@ -336,5 +337,42 @@ if __name__ == "__main__":
                 print(file_path)
     df["image"] = images
     df["bbox"] = bboxes
-    df.to_csv("csv_file/annotation.csv")
+    # df.to_csv("csv_file/annotation.csv")
 
+
+# if __name__ == "__main__":
+#     import pandas as pd
+#     from tqdm import tqdm
+#     df = pd.DataFrame(columns=["image", "bbox"])
+#     images = []
+#     bboxes = []
+#     crop_model = CropModel()
+#     old_data = pd.read_csv("csv_file/annotation.csv")
+#     old_data["product_id"] = old_data["image"].str.split(pat="/").str[-2]
+#     # count = 0
+#     for root, dirs, files in tqdm(os.walk("/AIHCM/ComputerVision/tienhn/fashion-dataset/image/new_data", topdown=False)):
+#         product_id = root.split("/")[-1]
+#         if product_id in old_data["product_id"].tolist():
+#             print("Repeat dataaaa: ", product_id)
+#             continue
+#         for name in files:
+#             file_path = os.path.join(root, name)
+#             try:
+#                 img = cv2.imread(file_path)
+#                 shape = img.shape
+#                 bbox = crop_model.crop_batch(batch_img=[img], conf_thresh=0.2, iou_thresh=0.45)
+#                 if bbox:
+#                     area = (bbox[2]-bbox[0])*(bbox[3]-bbox[1])
+#                     if 0.2*shape[0]*shape[1] < area < 0.8*shape[0]*shape[1]:
+#                         images.append(file_path)
+#                         bboxes.append(bbox)
+#                         # img = crop_model.draw_bbox_static(image=img, list_bbox=bbox)
+#                         # cv2.imwrite(f"/AIHCM/ComputerVision/tienhn/fashion-dataset/image/A/{count}.jpg", img)
+#                         # count += 1
+#             except Exception as e:
+#                 print(e)
+#                 print(file_path)
+#     df["image"] = images
+#     df["bbox"] = bboxes
+#     df.to_csv("csv_file/annotation_merge_new_data_2.csv")
+#     print(df.describe())

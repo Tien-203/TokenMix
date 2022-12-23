@@ -1,7 +1,10 @@
 /Checkpoints/
+/image_test/
 /DataProcessing/image_test/
 /DataProcessing/csv_file/
 /__pycache__/
+*/__pycache__/
+*/*/__pycache__/
 /logs/
 .log
 .idea

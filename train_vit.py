@@ -73,14 +73,14 @@ class FashionDataLoader(Dataset):
         mix_sample, pos_label, neg_label = self.token_mix(pos_sample=pos_sample.copy(), neg_sample=neg_sample.copy())
         if self.config.save_img:
             img = self.draw_bbox_static(
-                image=np.array(pos_sample[IMAGE]), list_bbox=pos_sample[BBOX])
-            cv2.imwrite("pos.jpg", img)
+                image=np.array(pos_sample[IMAGE]).copy(), list_bbox=pos_sample[BBOX])
+            cv2.imwrite(f"image_test/{idx}_pos.jpg", img)
             img = self.draw_bbox_static(
-                image=np.array(neg_sample[IMAGE]), list_bbox=neg_sample[BBOX])
-            cv2.imwrite("neg.jpg", img)
+                image=np.array(neg_sample[IMAGE]).copy(), list_bbox=neg_sample[BBOX])
+            cv2.imwrite(f"image_test/{idx}_neg.jpg", img)
             img = self.draw_bbox_static(
-                image=np.array(mix_sample[IMAGE]), list_bbox=mix_sample[BBOX])
-            cv2.imwrite("mix.jpg", img)
+                image=np.array(mix_sample[IMAGE]).copy(), list_bbox=mix_sample[BBOX])
+            cv2.imwrite(f"image_test/{idx}_mix.jpg", img)
         if self.transform:
             pos_sample[IMAGE] = self.transform(pos_sample[IMAGE])
             neg_sample[IMAGE] = self.transform(neg_sample[IMAGE])
@@ -179,6 +179,7 @@ class FashionDataLoader(Dataset):
     def __next__(self):
         if self.idx < len(self):
             result = self.get_single_image(self.idx)
+            # result = self.__getitem__(self.idx)
             self.idx += 1
             return result
         else:
@@ -200,12 +201,15 @@ class Model(nn.Module):
         self.cosine = nn.CosineSimilarity()
 
     def forward_one(self, x):
-        # x = self.vit_16(**x).pooler_output
-        x = self.vit_16(**x).last_hidden_state[:, 0]
+        x = self.vit_16(**x).pooler_output
+        # x = self.vit_16(**x).last_hidden_state[:, 0]
         return x
 
     def forward(self, pos_img, neg_img, mix_img):
         pos_feature = self.forward_one(pos_img)
+        # with open("array1.txt", "w") as f:
+        #     f.write(str(pos_feature.tolist()))
+        #     print(111111111)
         neg_feature = self.forward_one(neg_img)
         mix_feature = self.forward_one(mix_img)
         pos_diff = self.cosine(pos_feature, mix_feature)
@@ -231,8 +235,6 @@ class TrainModel:
                                            transform=transforms.Compose([
                                                transforms.Resize(self.config.image_size),
                                                transforms.ToTensor(),
-                                               transforms.RandomAutocontrast(),
-                                               transforms.RandomHorizontalFlip(p=0.5),
                                                transforms.RandomCrop(size=int(self.config.image_size*0.9))]))
         self.test_data = self.data_loader(self.test_data, is_test=True)
         self.writer = SummaryWriter(log_dir=self.config.tensorboard_dir, flush_secs=2)
@@ -244,6 +246,10 @@ class TrainModel:
             self.model.to(self.device)
             self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             self.scheduler.load_state_dict(checkpoint["scheduler"])
+    
+    # def load_pretrained_model(self):
+    #     if self.args.pretrained is not None:
+    #         self.model = torch.load(self.args.pretrained, map_location=self.device)
 
     def data_loader(self, df: pd.DataFrame, is_test, transform=None):
         if transform is None:
@@ -253,7 +259,7 @@ class TrainModel:
                                          transforms.ToTensor()]))
         else:
             data = FashionDataLoader(df=df, config=self.config, is_test=is_test, transform=transform)
-        return DataLoader(data, batch_size=self.config.batch_size, num_workers=1)
+        return DataLoader(data, batch_size=self.config.batch_size, num_workers=0)
 
     def train_test_split(self, csv_file):
         df = pd.read_csv(csv_file)
@@ -270,7 +276,7 @@ class TrainModel:
         train_accuracy = 0
         test_loss = None
         test_accuracy = None
-        for iter, data in tqdm(enumerate(self.train_data)):
+        for iter, data in enumerate(tqdm(self.train_data)):
             # a = []
             # if iter % 500 and iter > 0:
             #     a = list(self.model.parameters())[-5].clone()
@@ -288,7 +294,7 @@ class TrainModel:
             loss.backward()
             self.optimizer.step()
             self.scheduler.step()
-            train_loss += loss
+            train_loss += loss.detach()
             accuracy = (torch.abs(pos_diff - pos_label) <= self.config.similarity_thresh).sum() + \
                        (torch.abs(neg_diff - neg_label) <= self.config.similarity_thresh).sum()
             train_accuracy += accuracy
@@ -297,6 +303,7 @@ class TrainModel:
                 print(f"\t\tEpoch {epoch} - iter {iter} - train_loss {loss} - train_acc {acc}")
                 # b = list(self.model.parameters())[-5].clone()
                 # print(torch.equal(b, a))
+
         train_loss /= len(self.train_data)
         train_accuracy = train_accuracy / len(self.train_data) / self.config.batch_size / 2
         print(f"Train_loss: {train_loss} - Train_acc: {train_accuracy}")
@@ -308,7 +315,7 @@ class TrainModel:
             test_accuracy = 0
             self.model.eval()
             with torch.no_grad():
-                for iter, data in tqdm(enumerate(self.test_data)):
+                for iter, data in enumerate(tqdm(self.test_data)):
                     pos_img = self.feature_extractor(images=[img for img in data[POS_SAMPLE][IMAGE]],
                                                      return_tensors="pt").to(self.device)
                     neg_img = self.feature_extractor(images=[img for img in data[NEG_SAMPLE][IMAGE]],
@@ -319,10 +326,11 @@ class TrainModel:
                     pos_label = data[POS_RATIO].to(self.device)
                     neg_label = data[NEG_RATIO].to(self.device)
                     loss = (self.criterion(pos_diff, pos_label) + self.criterion(neg_diff, neg_label)) / 2
-                    test_loss += loss
+                    test_loss += loss.detach()
                     accuracy = (torch.abs(pos_diff - pos_label) <= self.config.similarity_thresh).sum() + \
                                (torch.abs(neg_diff - neg_label) <= self.config.similarity_thresh).sum()
                     test_accuracy += accuracy
+
             test_loss /= len(self.test_data)
             test_accuracy = test_accuracy / len(self.test_data) / self.config.batch_size / 2
             self.writer.add_scalar("Loss/Test Loss", test_loss, epoch)
@@ -366,8 +374,12 @@ def option():
 if __name__ == "__main__":
     import warnings
     import os
+    import shutil
     warnings.filterwarnings("ignore")
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     os.environ["CUDA_VISIBLE_DEVICES"] = config_.device
     argument = option()
-    TrainModel(csv_file="DataProcessing/csv_file/annotation.csv", config=config_, args=argument).train()
+    if os.path.exists(config_.tensorboard_dir):
+        shutil.rmtree(config_.tensorboard_dir)
+    TrainModel(csv_file=config_.csv_file, config=config_, args=argument).train()
+
