@@ -19,6 +19,7 @@ from transformers import ViTModel, ViTFeatureExtractor
 
 from config.config_vit import Config
 from config.common_keys import *
+from services.transform import RandomDraw
 
 config_ = Config()
 
@@ -234,6 +235,7 @@ class TrainModel:
         self.train_data = self.data_loader(self.train_data, is_test=False,
                                            transform=transforms.Compose([
                                                transforms.Resize(self.config.image_size),
+                                               RandomDraw(),
                                                transforms.ToTensor(),
                                                transforms.RandomCrop(size=int(self.config.image_size*0.9))]))
         self.test_data = self.data_loader(self.test_data, is_test=True)
