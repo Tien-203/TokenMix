@@ -1,5 +1,6 @@
 from typing import List, Dict
 import argparse
+import regex 
 
 import torch
 import torch.nn as nn
@@ -16,10 +17,11 @@ from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from torch.utils.tensorboard import SummaryWriter
 from transformers import ViTModel, ViTFeatureExtractor
+from shapely.geometry import Polygon
 
 from config.config_vit import Config
 from config.common_keys import *
-from services.transform import RandomDraw
+from services.transform import RandomDraw, MultiQuality
 
 config_ = Config()
 
@@ -59,6 +61,7 @@ class FashionDataLoader(Dataset):
         self.transform = transform
         self.is_test = is_test
         self.idx = 0
+        self.pattern = r"\d_\d.jpg$"
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     def __len__(self):
@@ -66,12 +69,23 @@ class FashionDataLoader(Dataset):
 
     def __getitem__(self, idx):
         pos_idx = idx
-        neg_idx = random(idx, is_test=self.is_test)
-        if neg_idx >= len(self):
-            neg_idx -= len(self)
-        pos_sample = self.get_single_image(pos_idx)
-        neg_sample = self.get_single_image(neg_idx)
-        mix_sample, pos_label, neg_label = self.token_mix(pos_sample=pos_sample.copy(), neg_sample=neg_sample.copy())
+        if regex.search(self.pattern, self.df.iloc[pos_idx, 2]) and regex.search(self.pattern, self.df.iloc[pos_idx, 4]):
+            neg_idx = pos_idx
+        else:
+            neg_idx = random(idx, is_test=self.is_test)
+            if neg_idx >= len(self):
+                neg_idx -= len(self)
+        try:
+            pos_sample = self.get_single_image(pos_idx, type_image="positive")
+            neg_sample = self.get_single_image(neg_idx, type_image="negative")
+            if neg_idx == pos_idx:
+                mix_sample, pos_label, neg_label = self.token_mix_for_img_augmented(idx=pos_idx, pos_sample=pos_sample.copy(), 
+                                                                                    neg_sample=neg_sample.copy())
+            else:
+                mix_sample, pos_label, neg_label = self.token_mix(pos_sample=pos_sample.copy(), neg_sample=neg_sample.copy())
+        except Exception as e:
+            print(f"Load data failed. Index: {idx}.\n Error: {e}")
+            return None
         if self.config.save_img:
             img = self.draw_bbox_static(
                 image=np.array(pos_sample[IMAGE]).copy(), list_bbox=pos_sample[BBOX])
@@ -94,12 +108,20 @@ class FashionDataLoader(Dataset):
             NEG_RATIO: neg_label
         }
 
-    def get_single_image(self, idx):
+    def get_single_image(self, idx, type_image="positive"):
         if torch.is_tensor(idx):
             idx = idx.tolist()
-        img_path = self.df.iloc[idx, 0]
-        bbox = self.df.iloc[idx, 1][1:-1]
+        if type_image == "positive":
+            img_path = self.df.iloc[idx, 0]
+            bbox = self.df.iloc[idx, 1][1:-1]
+        elif type_image == "negative":
+            img_path = self.df.iloc[idx, 2]
+            bbox = self.df.iloc[idx, 3][1:-1]
+        elif type_image == "mix":
+            img_path = self.df.iloc[idx, 4]
+            bbox = self.df.iloc[idx, 5][1:-1]
         bbox = [int(i) for i in bbox.split(", ")]
+        img_path = img_path.replace("/AIHCM/ComputerVision/tienhn/fashion-dataset", "/AIHCM/FileShare/Public/AI_Member/tienhn/server23/fashion-dataset")
         image = cv2.imread(img_path)
         shape = image.shape
         height_scale = self.config.image_size / shape[0]
@@ -172,7 +194,26 @@ class FashionDataLoader(Dataset):
         mix_img = Image.fromarray(mix_img)
         mix_sample = {IMAGE: mix_img, BBOX: pos_sample[BBOX]}
         return mix_sample, torch.tensor(float(pos_label)), \
-               torch.tensor(float(neg_label))
+            torch.tensor(float(neg_label))
+
+    def token_mix_for_img_augmented(self, idx:int, pos_sample: Dict, neg_sample: Dict):
+        mix_sample = self.get_single_image(idx=idx, type_image="mix")
+        p_pos = [(pos_sample[BBOX][0], pos_sample[BBOX][1]), (pos_sample[BBOX][0], pos_sample[BBOX][3]), 
+                (pos_sample[BBOX][2], pos_sample[BBOX][3]), (pos_sample[BBOX][2], pos_sample[BBOX][0])]
+        p_neg = [(neg_sample[BBOX][0], neg_sample[BBOX][1]), (neg_sample[BBOX][0], neg_sample[BBOX][3]), 
+                (neg_sample[BBOX][2], neg_sample[BBOX][3]), (neg_sample[BBOX][2], neg_sample[BBOX][0])]
+        p_mix = [(mix_sample[BBOX][0], mix_sample[BBOX][1]), (mix_sample[BBOX][0], mix_sample[BBOX][3]), 
+                (mix_sample[BBOX][2], mix_sample[BBOX][3]), (mix_sample[BBOX][2], mix_sample[BBOX][0])]
+        p_pos = Polygon(p_pos).area
+        p_neg = Polygon(p_neg).area
+        p_mix = Polygon(p_mix).area
+        pos_label = p_pos / p_mix if p_pos < p_mix else p_mix / p_pos
+        neg_label = p_neg / p_mix if p_neg < p_mix else p_mix / p_neg
+        # Normalize [0.75 1]
+        pos_label = 0.75 + pos_label / 4
+        neg_label = 0.75 + neg_label / 4
+        return mix_sample, torch.tensor(float(pos_label)), \
+            torch.tensor(float(neg_label))
 
     def __iter__(self):
         return self
@@ -228,7 +269,8 @@ class TrainModel:
         self.model = Model(config=config).to(self.device)
         self.criterion = nn.MSELoss().to(self.device)
         self.optimizer = optim.AdamW(self.model.parameters(), lr=self.config.lr, weight_decay=self.config.weight_decay)
-        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=5, eta_min=0.00001)
+        # self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=5, eta_min=0.00001)
+        self.scheduler = optim.lr_scheduler.CyclicLR(self.optimizer, base_lr=0.00001, max_lr=self.config.lr, cycle_momentum=False)
         self.load_pretrained_model()
         self.train_data, self.test_data = self.train_test_split(csv_file=csv_file)
         print(self.train_data.iloc[0])
@@ -236,18 +278,19 @@ class TrainModel:
                                            transform=transforms.Compose([
                                                transforms.Resize(self.config.image_size),
                                                RandomDraw(),
-                                               transforms.ToTensor(),
-                                               transforms.RandomCrop(size=int(self.config.image_size*0.9))]))
+                                               MultiQuality(random_ratio=0.3),
+                                               transforms.ToTensor()]))
         self.test_data = self.data_loader(self.test_data, is_test=True)
         self.writer = SummaryWriter(log_dir=self.config.tensorboard_dir, flush_secs=2)
 
     def load_pretrained_model(self):
         if self.args.pretrained is not None:
             checkpoint = torch.load(self.args.pretrained, map_location=self.device)
-            self.model.load_state_dict(checkpoint["model_state_dict"], strict=False)
+            self.model.load_state_dict(checkpoint["model_state_dict"])
             self.model.to(self.device)
             self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             self.scheduler.load_state_dict(checkpoint["scheduler"])
+            torch.save(self.model, "/AIHCM/AI_Member/workspace/tienhn/TokenMix/Checkpoints/weight_vit_6/best.pt")
     
     # def load_pretrained_model(self):
     #     if self.args.pretrained is not None:
@@ -282,6 +325,8 @@ class TrainModel:
             # a = []
             # if iter % 500 and iter > 0:
             #     a = list(self.model.parameters())[-5].clone()
+            if data is None:
+                continue
             self.optimizer.zero_grad()
             pos_img = self.feature_extractor(images=[img for img in data[POS_SAMPLE][IMAGE]],
                                              return_tensors="pt").to(self.device)
@@ -362,11 +407,11 @@ class TrainModel:
                     "scheduler": self.scheduler.state_dict(),
                     "loss_train": result[TRAIN_LOSS],
                     "loss_test": result[TEST_LOSS]
-                }, f"{self.config.save_model_dir}/resnet_model_{epoch}_{result[TEST_ACCURACY]}.pth")
-                print(f"Save model at {self.config.save_model_dir}/resnet_model_{epoch}_{result[TEST_ACCURACY]}.pth")
+                }, f"{self.config.save_model_dir}/epoch_{epoch}_{result[TEST_ACCURACY]}.pth") 
+                print(f"Save model at {self.config.save_model_dir}/epoch_{epoch}_{result[TEST_ACCURACY]}.pth")
                 max_acc = result[TEST_ACCURACY]
 
-
+ 
 def option():
     parser = argparse.ArgumentParser()
     parser.add_argument("--pretrained", type=str, default=None, help="Load pretrained model")
@@ -384,4 +429,3 @@ if __name__ == "__main__":
     if os.path.exists(config_.tensorboard_dir):
         shutil.rmtree(config_.tensorboard_dir)
     TrainModel(csv_file=config_.csv_file, config=config_, args=argument).train()
-

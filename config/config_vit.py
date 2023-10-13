@@ -11,15 +11,15 @@ class Config(metaclass=Singleton):
     random_neg_step = 500
     shuffle = True
     test_data_size = 0.1
-    csv_file = "DataProcessing/csv_file/annotation_shopee_v3.csv"
+    csv_file = "DataProcessing/csv_file/annotation_shopee_v3_augmentation.csv"
 
     # Model
     epochs = 200
     batch_size = 4
     similarity_thresh = 0.1
     device = "2"
-    tensorboard_dir = "Checkpoints/tensorboard_vit_4"
-    save_model_dir = "Checkpoints/weight_vit_4"
+    tensorboard_dir = "Checkpoints/tensorboard_vit_7"
+    save_model_dir = "Checkpoints/weight_vit_7"
     save_model_period = 1
     lr = 0.001
     weight_decay = 0.05

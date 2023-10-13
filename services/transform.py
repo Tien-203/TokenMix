@@ -1,6 +1,7 @@
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 import cv2
 import numpy as np
+from torchvision import transforms
 
 
 class RandomDraw:
@@ -8,7 +9,7 @@ class RandomDraw:
         self.color_list = ["red", "black", "blue", "green", "yellow", "purple", "gray"]
         self.width = 5
         self.random_ratio = random_ratio
-        np.random.seed(10)
+        # np.random.seed(10)
 
     def __call__(self, sample: Image) -> Image:
         is_process = np.random.choice(2, p=[1 - self.random_ratio, self.random_ratio])
@@ -34,9 +35,48 @@ class RandomDraw:
         return list_points
 
 
+class MultiQuality:
+    def __init__(self, random_ratio: float = 0.2):
+        self.random_ratio = random_ratio
+        self.img_name = "encode_" + str(np.random.choice(100)) + ".jpeg"
+        # np.random.seed(10)
+
+    def __call__(self, sample: Image) -> Image:
+        is_process = np.random.choice(2, p=[1 - self.random_ratio, self.random_ratio])
+        if is_process:
+            list_transforms = [self.resize, self.encode]
+            transform = transforms.RandomApply(transforms=np.random.choice(list_transforms, size=2, replace=False), p=1)
+            sample = transform(sample)
+        return sample
+
+    @staticmethod
+    def resize(sample: Image) -> Image:
+        ratio = np.random.choice(3) + 1
+        w, h = sample.size
+        sample = sample.resize((w//ratio, h//ratio))
+        sample = sample.resize((w, h))
+        return sample
+
+    @staticmethod
+    def blur(sample: Image) -> Image:
+        ratio = np.random.choice(2) + 1
+        sample = sample.filter(ImageFilter.GaussianBlur(ratio))
+        return sample
+
+    def encode(self, sample: Image) -> Image:
+        ratio = np.random.choice(20) + 60
+        sample.save(self.img_name, quality=ratio)
+        sample = Image.open(self.img_name)
+        return sample
+
+
 if __name__ == "__main__":
-    img = Image.open("/AIHCM/ComputerVision/tienhn/fashion-dataset/TokenMix/9.jpg")
-    transform = RandomDraw()
-    for i in range(20):
-        a = transform(img)
+    # img = Image.open("/AIHCM/FileShare/Public/AI_Member/tienhn/server23/fashion-dataset/TokenMix/9.jpg")
+    # transform = RandomDraw()
+    # for i in range(20):
+    #     a = transform(img)
+    # a.save("a.jpg")
+    img = Image.open("/AIHCM/FileShare/Public/AI_Member/tienhn/server23/fashion-dataset/TokenMix/9.jpg")
+    transform = MultiQuality(random_ratio=1)
+    a = transform(img)
     a.save("a.jpg")
